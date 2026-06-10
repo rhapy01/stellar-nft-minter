@@ -36,6 +36,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import {
@@ -338,9 +339,9 @@ export function MintPanel() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="md:col-span-2 space-y-4">
                   <div className="space-y-3">
-                    <FormLabel className="font-mono text-xs uppercase text-muted-foreground">
+                    <Label className="font-mono text-xs uppercase text-muted-foreground">
                       NFT Image
-                    </FormLabel>
+                    </Label>
 
                     <div className="flex gap-2">
                       <Button
