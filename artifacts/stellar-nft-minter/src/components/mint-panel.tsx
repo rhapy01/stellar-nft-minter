@@ -11,7 +11,7 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useWallet } from "./wallet-context";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { buildMintTransaction } from "@/lib/contract";
@@ -53,7 +53,14 @@ import {
   XCircle,
   ExternalLink,
   Image as ImageIcon,
+  Upload,
+  Link2,
 } from "lucide-react";
+import {
+  compressImageFile,
+  resolveMintImageUrl,
+  validateImageFile,
+} from "@/lib/image";
 
 // ─── Form schema ──────────────────────────────────────────────────────────────
 
@@ -66,7 +73,7 @@ const formSchema = z.object({
     .string()
     .min(1, "Description is required")
     .max(500, "Max 500 characters"),
-  imageUrl: z.string().url("Must be a valid HTTPS URL"),
+  imageUrl: z.string().optional(),
   attributes: z.string().optional(),
 });
 
@@ -77,7 +84,7 @@ type FormValues = z.infer<typeof formSchema>;
 type TxState =
   | { status: "idle" }
   | { status: "pending"; step: string }
-  | { status: "success"; txHash: string; tokenId?: number }
+  | { status: "success"; txHash: string; tokenId?: number; imageUrl?: string }
   | ({ status: "error" } & MintError);
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -86,6 +93,11 @@ export function MintPanel() {
   const { address, signTx } = useWallet();
   const queryClient = useQueryClient();
   const [txState, setTxState] = useState<TxState>({ status: "idle" });
+  const [imageMode, setImageMode] = useState<"upload" | "url">("upload");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: balance } = useQuery({
     queryKey: ["balance", address],
@@ -106,6 +118,38 @@ export function MintPanel() {
 
   const watchImageUrl = form.watch("imageUrl");
   const isPending = txState.status === "pending";
+  const previewSrc =
+    imagePreview ?? (imageMode === "url" ? watchImageUrl : null) ?? null;
+
+  const handleImageFile = async (file: File | null) => {
+    if (!file) return;
+    const validationError = validateImageFile(file);
+    if (validationError) {
+      setImageError(validationError);
+      return;
+    }
+
+    try {
+      setImageError(null);
+      const compressed = await compressImageFile(file);
+      setImageFile(file);
+      setImagePreview(compressed.dataUrl);
+      form.setValue("imageUrl", "");
+      form.clearErrors("imageUrl");
+    } catch (err: unknown) {
+      setImageError(
+        err instanceof Error ? err.message : "Could not process image.",
+      );
+    }
+  };
+
+  const clearImage = () => {
+    setImageFile(null);
+    setImagePreview(null);
+    setImageError(null);
+    form.setValue("imageUrl", "");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
 
   const onSubmit = async (data: FormValues) => {
     if (!address) return;
@@ -124,23 +168,30 @@ export function MintPanel() {
         return;
       }
 
-      // ── 2. Build & simulate the Soroban transaction ───────────────────────
+      // ── 2. Resolve image (upload or URL) ─────────────────────────────────
+      setTxState({ status: "pending", step: "Preparing NFT image…" });
+      const imageUrl = await resolveMintImageUrl({
+        file: imageMode === "upload" ? imageFile : null,
+        url: imageMode === "url" ? data.imageUrl : undefined,
+      });
+
+      // ── 3. Build & simulate the Soroban transaction ───────────────────────
       setTxState({ status: "pending", step: "Building Soroban transaction…" });
       const preparedXdr = await buildMintTransaction(
         address,
         data.nftName,
         data.description,
-        data.imageUrl,
+        imageUrl,
       );
 
-      // ── 3. Sign via the connected wallet ──────────────────────────────────
+      // ── 4. Sign via the connected wallet ──────────────────────────────────
       setTxState({
         status: "pending",
         step: "Waiting for wallet signature…",
       });
       const signedXdr = await signTx(preparedXdr);
 
-      // ── 4. Submit to Stellar Testnet ──────────────────────────────────────
+      // ── 5. Submit to Stellar Testnet ──────────────────────────────────────
       setTxState({
         status: "pending",
         step: "Broadcasting to Stellar Testnet…",
@@ -153,7 +204,7 @@ export function MintPanel() {
         );
       }
 
-      // ── 5. Poll for ledger confirmation ───────────────────────────────────
+      // ── 6. Poll for ledger confirmation ───────────────────────────────────
       setTxState({
         status: "pending",
         step: "Waiting for ledger confirmation…",
@@ -171,8 +222,14 @@ export function MintPanel() {
           // best-effort
         }
 
-        setTxState({ status: "success", txHash: sendResult.hash, tokenId });
+        setTxState({
+          status: "success",
+          txHash: sendResult.hash,
+          tokenId,
+          imageUrl,
+        });
         form.reset();
+        clearImage();
 
         // Refresh live stats and activity feed
         queryClient.invalidateQueries({ queryKey: ["total_supply"] });
@@ -280,26 +337,127 @@ export function MintPanel() {
               {/* Image + Attributes + Preview */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="md:col-span-2 space-y-4">
-                  <FormField
-                    control={form.control}
-                    name="imageUrl"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="font-mono text-xs uppercase text-muted-foreground">
-                          Image URL
-                        </FormLabel>
-                        <FormControl>
-                          <Input
-                            placeholder="https://…"
-                            className="bg-background font-mono text-xs"
-                            {...field}
+                  <div className="space-y-3">
+                    <FormLabel className="font-mono text-xs uppercase text-muted-foreground">
+                      NFT Image
+                    </FormLabel>
+
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={imageMode === "upload" ? "default" : "outline"}
+                        className="font-mono text-xs"
+                        onClick={() => {
+                          setImageMode("upload");
+                          setImageError(null);
+                        }}
+                        disabled={isPending}
+                      >
+                        <Upload className="w-3.5 h-3.5 mr-1.5" />
+                        Upload
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={imageMode === "url" ? "default" : "outline"}
+                        className="font-mono text-xs"
+                        onClick={() => {
+                          setImageMode("url");
+                          setImageError(null);
+                        }}
+                        disabled={isPending}
+                      >
+                        <Link2 className="w-3.5 h-3.5 mr-1.5" />
+                        Image URL
+                      </Button>
+                    </div>
+
+                    {imageMode === "upload" ? (
+                      <div className="space-y-2">
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,image/gif"
+                          className="hidden"
+                          disabled={isPending}
+                          onChange={e => {
+                            void handleImageFile(e.target.files?.[0] ?? null);
+                          }}
+                        />
+                        <button
+                          type="button"
+                          disabled={isPending}
+                          onClick={() => fileInputRef.current?.click()}
+                          onDragOver={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                          }}
+                          onDrop={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            void handleImageFile(e.dataTransfer.files?.[0] ?? null);
+                          }}
+                          className="w-full min-h-[110px] rounded-md border border-dashed border-border bg-background hover:border-primary/50 hover:bg-primary/5 transition-colors flex flex-col items-center justify-center gap-2 px-4 py-6 disabled:opacity-50"
+                        >
+                          <Upload className="w-5 h-5 text-muted-foreground" />
+                          <span className="font-mono text-xs text-muted-foreground text-center">
+                            {imageFile
+                              ? imageFile.name
+                              : "Click or drag an image here"}
+                          </span>
+                          <span className="font-mono text-[10px] text-muted-foreground/70">
+                            JPEG, PNG, WebP, GIF · max 5 MB
+                          </span>
+                        </button>
+                        {imageFile && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="font-mono text-xs"
+                            onClick={clearImage}
                             disabled={isPending}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
+                          >
+                            Remove image
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      <FormField
+                        control={form.control}
+                        name="imageUrl"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormControl>
+                              <Input
+                                placeholder="https://example.com/image.png"
+                                className="bg-background font-mono text-xs"
+                                {...field}
+                                disabled={isPending}
+                                onChange={e => {
+                                  field.onChange(e);
+                                  setImageFile(null);
+                                  setImagePreview(null);
+                                  setImageError(null);
+                                }}
+                              />
+                            </FormControl>
+                            <FormDescription className="text-[10px]">
+                              Paste a public image link (http or https)
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
                     )}
-                  />
+
+                    {imageError && (
+                      <p className="font-mono text-xs text-destructive">
+                        {imageError}
+                      </p>
+                    )}
+                  </div>
 
                   <FormField
                     control={form.control}
@@ -331,9 +489,9 @@ export function MintPanel() {
                     Preview
                   </span>
                   <div className="flex-1 min-h-[120px] rounded border border-border bg-background flex items-center justify-center overflow-hidden">
-                    {watchImageUrl ? (
+                    {previewSrc ? (
                       <img
-                        src={watchImageUrl}
+                        src={previewSrc}
                         alt="Preview"
                         className="w-full h-full object-cover"
                         onError={e => {
@@ -465,6 +623,15 @@ export function MintPanel() {
                 <h3 className="font-mono text-green-400 font-bold text-xl mb-1">
                   Mint Successful
                 </h3>
+                {txState.imageUrl && (
+                  <div className="w-28 h-28 rounded-lg border border-green-500/20 overflow-hidden mb-4">
+                    <img
+                      src={txState.imageUrl}
+                      alt="Minted NFT"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                )}
                 {txState.tokenId !== undefined && (
                   <p className="font-mono text-sm text-muted-foreground mb-4">
                     Token ID: <span className="text-primary font-bold">#{txState.tokenId}</span>

@@ -95,6 +95,23 @@ export function classifyError(err: unknown): MintError {
     };
   }
 
+  // Image validation / upload
+  if (
+    lower.includes('image') &&
+    (lower.includes('upload') ||
+      lower.includes('too large') ||
+      lower.includes('jpeg') ||
+      lower.includes('png') ||
+      lower.includes('valid'))
+  ) {
+    return {
+      code: ErrorCode.INVALID_METADATA,
+      message: 'Invalid NFT image',
+      suggestion:
+        'Upload a JPEG/PNG/WebP/GIF under 5 MB, paste a public image URL, or add VITE_IMGBB_API_KEY for large uploads.',
+    };
+  }
+
   // Insufficient XLM balance
   if (
     lower.includes('insufficient') ||
