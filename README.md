@@ -4,6 +4,18 @@ Multi-wallet NFT minting on **Stellar Testnet** using **Soroban** smart contract
 
 **Live app:** https://stellar-nft-minter-rust.vercel.app
 
+**GitHub:** https://github.com/rhapy01/stellar-nft-minter
+
+**Testnet contract:** `CCR5FXO5HECHWEFFE4LOROEF6UOW4XWWKM6QKCSFBS72GJIXI2GMKO57`
+
+## Screenshots (verified mint on testnet)
+
+| App overview | Mint success + activity feed |
+|---|---|
+| ![App screenshot](./artifacts/stellar-nft-minter/public/mint-app-screenshot.png) | ![Mint success](./artifacts/stellar-nft-minter/public/mint-success-screenshot.png) |
+
+Example mint: **Cosmic Voyager #001** · Token **#1** · [View tx on Stellar Expert](https://stellar.expert/explorer/testnet)
+
 ## Features
 
 - **StellarWalletsKit** — Freighter + Albedo wallet integration

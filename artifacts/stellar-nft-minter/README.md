@@ -4,6 +4,14 @@ A fully on-chain NFT minting application on **Stellar Testnet** using **Soroban 
 
 **Live:** https://stellar-nft-minter-rust.vercel.app
 
+## Screenshots
+
+![Mint app](./public/mint-app-screenshot.png)
+
+![Mint success](./public/mint-success-screenshot.png)
+
+Verified testnet mint: **Cosmic Voyager #001** (Token #1)
+
 ## Features
 
 - **StellarWalletsKit** — unified Freighter + Albedo integration
