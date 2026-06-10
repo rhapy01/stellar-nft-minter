@@ -95,20 +95,24 @@ export function classifyError(err: unknown): MintError {
     };
   }
 
-  // Image validation / upload
+  // Image validation / upload — preserve the specific message when possible
   if (
-    lower.includes('image') &&
-    (lower.includes('upload') ||
-      lower.includes('too large') ||
-      lower.includes('jpeg') ||
-      lower.includes('png') ||
-      lower.includes('valid'))
+    lower.includes('image') ||
+    lower.includes('choose an image') ||
+    lower.includes('jpeg') ||
+    lower.includes('png') ||
+    lower.includes('webp') ||
+    lower.includes('gif')
   ) {
     return {
       code: ErrorCode.INVALID_METADATA,
-      message: 'Invalid NFT image',
+      message: raw || 'Invalid NFT image',
       suggestion:
-        'Upload a JPEG/PNG/WebP/GIF under 5 MB, paste a public image URL, or add VITE_IMGBB_API_KEY for large uploads.',
+        lower.includes('too large')
+          ? 'Try a smaller photo, or switch to the URL tab and paste a direct image link (e.g. from imgur or picsum.photos).'
+          : lower.includes('choose an image')
+            ? 'Pick a file under Upload, or switch to URL and paste a public image link.'
+            : 'Use JPEG/PNG/WebP/GIF under 5 MB, or paste a public https:// image URL.',
     };
   }
 

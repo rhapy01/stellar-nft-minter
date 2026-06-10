@@ -1,9 +1,9 @@
 // ─── Image helpers ────────────────────────────────────────────────────────────
 //
 // Supports local file upload for NFT images:
-//   1. Compress/resize in the browser
-//   2. Use a compact data URL when small enough for Soroban
-//   3. Otherwise upload via ImgBB when VITE_IMGBB_API_KEY is configured
+//   1. Aggressively compress in the browser (JPEG)
+//   2. Store compact data URL on-chain when small enough
+//   3. Otherwise upload to free image host (no API key required)
 
 const ACCEPTED_TYPES = new Set([
   'image/jpeg',
@@ -12,11 +12,22 @@ const ACCEPTED_TYPES = new Set([
   'image/gif',
 ]);
 
+const ACCEPTED_EXTENSIONS = /\.(jpe?g|png|webp|gif)$/i;
+
 /** Max raw file size before compression (5 MB). */
 export const MAX_IMAGE_FILE_BYTES = 5 * 1024 * 1024;
 
-/** Data URLs longer than this are too large for reliable Soroban mint txs. */
-const MAX_DATA_URL_LENGTH = 48_000;
+/** Soroban tx args must stay small — target well under this. */
+const MAX_DATA_URL_LENGTH = 24_000;
+
+const COMPRESS_ATTEMPTS: Array<[number, number]> = [
+  [640, 0.82],
+  [512, 0.75],
+  [384, 0.7],
+  [256, 0.62],
+  [200, 0.55],
+  [160, 0.48],
+];
 
 export interface CompressedImage {
   blob: Blob;
@@ -24,8 +35,18 @@ export interface CompressedImage {
   mimeType: string;
 }
 
+function guessMimeType(file: File): string {
+  if (file.type && ACCEPTED_TYPES.has(file.type)) return file.type;
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.png')) return 'image/png';
+  if (name.endsWith('.webp')) return 'image/webp';
+  if (name.endsWith('.gif')) return 'image/gif';
+  return 'image/jpeg';
+}
+
 export function validateImageFile(file: File): string | null {
-  if (!ACCEPTED_TYPES.has(file.type)) {
+  const mime = guessMimeType(file);
+  if (!ACCEPTED_TYPES.has(mime) && !ACCEPTED_EXTENSIONS.test(file.name)) {
     return 'Use a JPEG, PNG, WebP, or GIF image.';
   }
   if (file.size > MAX_IMAGE_FILE_BYTES) {
@@ -37,8 +58,9 @@ export function validateImageFile(file: File): string | null {
 /** Resize and compress an image file in the browser. */
 export async function compressImageFile(
   file: File,
-  maxDimension = 1024,
-  quality = 0.82,
+  maxDimension = 512,
+  quality = 0.75,
+  forceJpeg = false,
 ): Promise<CompressedImage> {
   const objectUrl = URL.createObjectURL(file);
   try {
@@ -54,16 +76,34 @@ export async function compressImageFile(
     ctx.drawImage(img, 0, 0, width, height);
 
     const mimeType =
-      file.type === 'image/png' || file.type === 'image/gif'
-        ? file.type
-        : 'image/jpeg';
+      forceJpeg || (!file.type && !file.name.match(/\.(png|gif|webp)$/i))
+        ? 'image/jpeg'
+        : file.type === 'image/png' || file.type === 'image/gif'
+          ? file.type
+          : 'image/jpeg';
 
-    const blob = await canvasToBlob(canvas, mimeType, quality);
+    const blob = await canvasToBlob(
+      canvas,
+      forceJpeg ? 'image/jpeg' : mimeType,
+      quality,
+    );
     const dataUrl = await blobToDataUrl(blob);
-    return { blob, dataUrl, mimeType };
+    return { blob, dataUrl, mimeType: forceJpeg ? 'image/jpeg' : mimeType };
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
+}
+
+/** Compress repeatedly until the data URL fits on-chain limits. */
+async function compressForOnChain(file: File): Promise<CompressedImage> {
+  let last: CompressedImage | null = null;
+  for (const [dim, quality] of COMPRESS_ATTEMPTS) {
+    const result = await compressImageFile(file, dim, quality, true);
+    last = result;
+    if (result.dataUrl.length <= MAX_DATA_URL_LENGTH) return result;
+  }
+  if (!last) throw new Error('Could not compress image.');
+  return last;
 }
 
 /** Resolve the image URL that will be written to the Soroban contract. */
@@ -75,7 +115,7 @@ export async function resolveMintImageUrl(opts: {
     const validationError = validateImageFile(opts.file);
     if (validationError) throw new Error(validationError);
 
-    const compressed = await compressImageFile(opts.file);
+    const compressed = await compressForOnChain(opts.file);
 
     if (compressed.dataUrl.length <= MAX_DATA_URL_LENGTH) {
       return compressed.dataUrl;
@@ -83,28 +123,79 @@ export async function resolveMintImageUrl(opts: {
 
     const apiKey = (import.meta as ImportMeta & { env?: Record<string, string> })
       .env?.VITE_IMGBB_API_KEY;
-    if (apiKey) {
-      return uploadToImgbb(compressed.blob, apiKey);
+
+    const hostErrors: string[] = [];
+
+    for (const host of [
+      () => uploadToCatbox(compressed.blob),
+      () => uploadTo0x0(compressed.blob),
+      ...(apiKey ? [() => uploadToImgbb(compressed.blob, apiKey)] : []),
+    ]) {
+      try {
+        return await host();
+      } catch (err) {
+        hostErrors.push(err instanceof Error ? err.message : String(err));
+      }
     }
 
     throw new Error(
-      'Image is too large to store on-chain after compression. Paste an HTTPS image URL instead, or add VITE_IMGBB_API_KEY for automatic uploads.',
+      `Image is too large after compression (${Math.round(compressed.dataUrl.length / 1024)} KB). Switch to the URL tab and paste a public image link.`,
     );
   }
 
   const trimmed = opts.url?.trim() ?? '';
-  if (!trimmed) throw new Error('Add an image file or paste an image URL.');
+  if (!trimmed) {
+    throw new Error('Choose an image file or paste an image URL.');
+  }
 
   try {
     const parsed = new URL(trimmed);
     if (!['http:', 'https:'].includes(parsed.protocol)) {
       throw new Error('Image URL must use http or https.');
     }
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('http')) throw err;
     throw new Error('Image URL must be a valid http(s) address.');
   }
 
   return trimmed;
+}
+
+async function uploadToCatbox(blob: Blob): Promise<string> {
+  const form = new FormData();
+  form.append('reqtype', 'fileupload');
+  form.append('fileToUpload', blob, 'nft.jpg');
+
+  const resp = await fetch('https://catbox.moe/user/api.php', {
+    method: 'POST',
+    body: form,
+  });
+
+  if (!resp.ok) {
+    throw new Error(`Catbox upload failed (HTTP ${resp.status}).`);
+  }
+
+  const url = (await resp.text()).trim();
+  if (!url.startsWith('http')) {
+    throw new Error('Catbox upload returned an invalid URL.');
+  }
+  return url;
+}
+
+async function uploadTo0x0(blob: Blob): Promise<string> {
+  const form = new FormData();
+  form.append('file', blob, 'nft.jpg');
+
+  const resp = await fetch('https://0x0.st', { method: 'POST', body: form });
+  if (!resp.ok) {
+    throw new Error(`Image host failed (HTTP ${resp.status}).`);
+  }
+
+  const url = (await resp.text()).trim();
+  if (!url.startsWith('http')) {
+    throw new Error('Image host returned an invalid URL.');
+  }
+  return url;
 }
 
 async function uploadToImgbb(blob: Blob, apiKey: string): Promise<string> {
@@ -122,7 +213,7 @@ async function uploadToImgbb(blob: Blob, apiKey: string): Promise<string> {
   });
 
   if (!resp.ok) {
-    throw new Error(`Image upload failed (HTTP ${resp.status}).`);
+    throw new Error(`ImgBB upload failed (HTTP ${resp.status}).`);
   }
 
   const json = (await resp.json()) as {
@@ -132,10 +223,12 @@ async function uploadToImgbb(blob: Blob, apiKey: string): Promise<string> {
   };
 
   if (!json.success) {
-    throw new Error(json.error?.message ?? 'Image upload failed.');
+    throw new Error(json.error?.message ?? 'ImgBB upload failed.');
   }
 
-  return json.data?.url ?? json.data?.display_url ?? '';
+  const url = json.data?.url ?? json.data?.display_url ?? '';
+  if (!url) throw new Error('ImgBB upload returned an empty URL.');
+  return url;
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {
