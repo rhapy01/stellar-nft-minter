@@ -1,0 +1,2 @@
+- [NixOS wasm32 Rust compilation](nix-wasm32-sysroot.md) — rustup toolchains have TLS issues on NixOS; use Nix rustc with downloaded wasm32 stdlib + custom sysroot instead.
+- [Stellar NFT Minter contract](stellar-nft-contract.md) — deployed contract address and key design decisions for the Testnet contract.

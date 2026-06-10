@@ -1,37 +1,98 @@
+// ─── Mint Panel ───────────────────────────────────────────────────────────────
+//
+// Real Soroban blockchain minting:
+//   1. Validates inputs
+//   2. Checks XLM balance (≥ 0.5 XLM required)
+//   3. Builds & simulates the Soroban `mint` transaction
+//   4. Signs via connected wallet (Freighter or Albedo)
+//   5. Submits to Stellar Testnet
+//   6. Polls for confirmation and shows the tx hash
+
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useState } from "react";
-import { useCreateMint, useUpdateMint } from "@workspace/api-client-react";
 import { useWallet } from "./wallet-context";
-import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { buildMintTransaction } from "@/lib/contract";
+import {
+  getXLMBalance,
+  pollTransaction,
+  submitSignedTransaction,
+} from "@/lib/stellar";
+import { classifyError, type MintError } from "@/lib/errors";
+import {
+  CONTRACT_NOT_DEPLOYED,
+  STELLAR_EXPERT_BASE,
+  FRIENDBOT_URL,
+} from "@/lib/constants";
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, CheckCircle2, Loader2, XCircle, ExternalLink, Image as ImageIcon } from "lucide-react";
+import {
+  Activity,
+  CheckCircle2,
+  Loader2,
+  XCircle,
+  ExternalLink,
+  Image as ImageIcon,
+} from "lucide-react";
+
+// ─── Form schema ──────────────────────────────────────────────────────────────
 
 const formSchema = z.object({
-  nftName: z.string().min(1, "Name is required").max(100),
-  description: z.string().min(1, "Description is required").max(1000),
-  imageUrl: z.string().url("Must be a valid URL"),
+  nftName: z
+    .string()
+    .min(1, "Name is required")
+    .max(64, "Max 64 characters"),
+  description: z
+    .string()
+    .min(1, "Description is required")
+    .max(500, "Max 500 characters"),
+  imageUrl: z.string().url("Must be a valid HTTPS URL"),
   attributes: z.string().optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
 
-export function MintPanel() {
-  const { address } = useWallet();
-  const createMint = useCreateMint();
-  const updateMint = useUpdateMint();
+// ─── Transaction state machine ────────────────────────────────────────────────
 
-  const [txState, setTxState] = useState<{
-    status: "idle" | "pending" | "success" | "error";
-    mintId?: number;
-    txHash?: string;
-    errorMessage?: string;
-  }>({ status: "idle" });
+type TxState =
+  | { status: "idle" }
+  | { status: "pending"; step: string }
+  | { status: "success"; txHash: string; tokenId?: number }
+  | ({ status: "error" } & MintError);
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
+export function MintPanel() {
+  const { address, signTx } = useWallet();
+  const queryClient = useQueryClient();
+  const [txState, setTxState] = useState<TxState>({ status: "idle" });
+
+  const { data: balance } = useQuery({
+    queryKey: ["balance", address],
+    queryFn: () => getXLMBalance(address!),
+    enabled: !!address,
+    refetchInterval: 30_000,
+  });
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -44,106 +105,179 @@ export function MintPanel() {
   });
 
   const watchImageUrl = form.watch("imageUrl");
+  const isPending = txState.status === "pending";
 
   const onSubmit = async (data: FormValues) => {
     if (!address) return;
 
-    setTxState({ status: "pending" });
-
     try {
-      // 1. Create the mint record
-      const mintRecord = await createMint.mutateAsync({
-        data: {
-          walletAddress: address,
-          nftName: data.nftName,
-          description: data.description,
-          imageUrl: data.imageUrl,
-          attributes: data.attributes || undefined,
-          network: "testnet",
-        }
-      });
-
-      setTxState(prev => ({ ...prev, mintId: mintRecord.id }));
-
-      // 2. Simulate transaction taking 3 seconds
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      // Simulate a random failure 10% of the time
-      if (Math.random() < 0.1) {
-        throw new Error("Contract execution failed: Invalid signature");
+      // ── 1. Balance check ──────────────────────────────────────────────────
+      setTxState({ status: "pending", step: "Checking wallet balance…" });
+      const bal = await getXLMBalance(address);
+      if (bal.xlm < 0.5) {
+        setTxState({
+          status: "error",
+          ...classifyError(
+            new Error("Insufficient balance — need at least 0.5 XLM"),
+          ),
+        });
+        return;
       }
 
-      const mockTxHash = Array.from({length: 64}, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('');
+      // ── 2. Build & simulate the Soroban transaction ───────────────────────
+      setTxState({ status: "pending", step: "Building Soroban transaction…" });
+      const preparedXdr = await buildMintTransaction(
+        address,
+        data.nftName,
+        data.description,
+        data.imageUrl,
+      );
 
-      // 3. Update the mint record
-      await updateMint.mutateAsync({
-        id: mintRecord.id,
-        data: {
-          status: "success",
-          txHash: mockTxHash,
-          nftId: `T-${mockTxHash.substring(0, 8)}`,
-        }
+      // ── 3. Sign via the connected wallet ──────────────────────────────────
+      setTxState({
+        status: "pending",
+        step: "Waiting for wallet signature…",
       });
+      const signedXdr = await signTx(preparedXdr);
 
-      setTxState({ status: "success", mintId: mintRecord.id, txHash: mockTxHash });
-      form.reset();
+      // ── 4. Submit to Stellar Testnet ──────────────────────────────────────
+      setTxState({
+        status: "pending",
+        step: "Broadcasting to Stellar Testnet…",
+      });
+      const sendResult = await submitSignedTransaction(signedXdr);
 
-    } catch (err: any) {
-      const errorMessage = err.message || "An unknown error occurred";
-      
-      if (txState.mintId) {
-        await updateMint.mutateAsync({
-          id: txState.mintId,
-          data: {
-            status: "failed",
-            errorMessage: errorMessage,
+      if (sendResult.status === "ERROR") {
+        throw new Error(
+          `Submission failed: ${(sendResult as any).errorResultXdr ?? "unknown"}`,
+        );
+      }
+
+      // ── 5. Poll for ledger confirmation ───────────────────────────────────
+      setTxState({
+        status: "pending",
+        step: "Waiting for ledger confirmation…",
+      });
+      const final = await pollTransaction(sendResult.hash);
+
+      if (final.status === "SUCCESS") {
+        let tokenId: number | undefined;
+        try {
+          const { scValToNative } = await import("@stellar/stellar-sdk");
+          if (final.returnValue) {
+            tokenId = Number(scValToNative(final.returnValue));
           }
-        }).catch(console.error);
-      }
+        } catch {
+          // best-effort
+        }
 
-      setTxState(prev => ({ ...prev, status: "error", errorMessage }));
+        setTxState({ status: "success", txHash: sendResult.hash, tokenId });
+        form.reset();
+
+        // Refresh live stats and activity feed
+        queryClient.invalidateQueries({ queryKey: ["total_supply"] });
+        queryClient.invalidateQueries({ queryKey: ["mint_events"] });
+      } else if (final.status === "FAILED") {
+        throw new Error(`Transaction failed on-chain: ${final.resultXdr ?? "unknown reason"}`);
+      } else {
+        throw new Error("Transaction confirmation timed out. Check Stellar Expert for status.");
+      }
+    } catch (err: unknown) {
+      setTxState({ status: "error", ...classifyError(err) });
     }
   };
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      {/* Form Panel */}
+      {/* ─── Form ────────────────────────────────────────────────────────── */}
       <Card className="border-border bg-card/50 backdrop-blur">
         <CardHeader>
-          <CardTitle className="font-mono text-lg text-primary">Initialize Mint</CardTitle>
-          <CardDescription>Enter the details for your new digital asset.</CardDescription>
+          <CardTitle className="font-mono text-lg text-primary">
+            Initialize Mint
+          </CardTitle>
+          <CardDescription>
+            {CONTRACT_NOT_DEPLOYED
+              ? "⚠ Contract not deployed — see README for deployment steps"
+              : "Mint an NFT on Stellar Testnet via Soroban smart contract"}
+          </CardDescription>
+
+          {/* XLM balance indicator */}
+          {address && balance && (
+            <p className="text-xs text-muted-foreground font-mono mt-1">
+              Balance:{" "}
+              <span
+                className={
+                  balance.xlm < 0.5 ? "text-destructive" : "text-green-400"
+                }
+              >
+                {balance.balance} XLM
+              </span>
+              {balance.xlm < 0.5 && (
+                <>
+                  {" · "}
+                  <a
+                    href={`${FRIENDBOT_URL}?addr=${address}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    Fund via Friendbot ↗
+                  </a>
+                </>
+              )}
+            </p>
+          )}
         </CardHeader>
+
         <CardContent>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              {/* Name */}
               <FormField
                 control={form.control}
                 name="nftName"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel className="font-mono text-xs uppercase text-muted-foreground">Asset Name</FormLabel>
+                    <FormLabel className="font-mono text-xs uppercase text-muted-foreground">
+                      Asset Name
+                    </FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g. Cosmic Voyager #001" className="bg-background font-mono" {...field} disabled={txState.status === "pending"} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              
-              <FormField
-                control={form.control}
-                name="description"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="font-mono text-xs uppercase text-muted-foreground">Description</FormLabel>
-                    <FormControl>
-                      <Textarea placeholder="Describe the asset..." className="bg-background resize-none" {...field} disabled={txState.status === "pending"} />
+                      <Input
+                        placeholder="e.g. Cosmic Voyager #001"
+                        className="bg-background font-mono"
+                        {...field}
+                        disabled={isPending}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
 
+              {/* Description */}
+              <FormField
+                control={form.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="font-mono text-xs uppercase text-muted-foreground">
+                      Description
+                    </FormLabel>
+                    <FormControl>
+                      <Textarea
+                        placeholder="Describe the asset…"
+                        className="bg-background resize-none"
+                        rows={3}
+                        {...field}
+                        disabled={isPending}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Image + Attributes + Preview */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="md:col-span-2 space-y-4">
                   <FormField
@@ -151,9 +285,16 @@ export function MintPanel() {
                     name="imageUrl"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel className="font-mono text-xs uppercase text-muted-foreground">Image URL</FormLabel>
+                        <FormLabel className="font-mono text-xs uppercase text-muted-foreground">
+                          Image URL
+                        </FormLabel>
                         <FormControl>
-                          <Input placeholder="https://..." className="bg-background font-mono text-xs" {...field} disabled={txState.status === "pending"} />
+                          <Input
+                            placeholder="https://…"
+                            className="bg-background font-mono text-xs"
+                            {...field}
+                            disabled={isPending}
+                          />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -165,54 +306,77 @@ export function MintPanel() {
                     name="attributes"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel className="font-mono text-xs uppercase text-muted-foreground">Attributes (JSON)</FormLabel>
+                        <FormLabel className="font-mono text-xs uppercase text-muted-foreground">
+                          Attributes (JSON)
+                        </FormLabel>
                         <FormControl>
-                          <Input placeholder='{"trait": "value"}' className="bg-background font-mono text-xs" {...field} disabled={txState.status === "pending"} />
+                          <Input
+                            placeholder='{"trait": "value"}'
+                            className="bg-background font-mono text-xs"
+                            {...field}
+                            disabled={isPending}
+                          />
                         </FormControl>
-                        <FormDescription className="text-[10px]">Optional key-value pairs</FormDescription>
-                        <FormMessage />
+                        <FormDescription className="text-[10px]">
+                          Optional — stored as transaction memo
+                        </FormDescription>
                       </FormItem>
                     )}
                   />
                 </div>
-                
+
+                {/* Image preview */}
                 <div className="flex flex-col gap-2">
-                  <span className="font-mono text-xs uppercase text-muted-foreground font-medium">Preview</span>
-                  <div className="flex-1 min-h-[120px] rounded border border-border bg-background flex items-center justify-center overflow-hidden relative">
+                  <span className="font-mono text-xs uppercase text-muted-foreground font-medium">
+                    Preview
+                  </span>
+                  <div className="flex-1 min-h-[120px] rounded border border-border bg-background flex items-center justify-center overflow-hidden">
                     {watchImageUrl ? (
-                      <img 
-                        src={watchImageUrl} 
-                        alt="Preview" 
+                      <img
+                        src={watchImageUrl}
+                        alt="Preview"
                         className="w-full h-full object-cover"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                          e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                        onError={e => {
+                          (e.target as HTMLImageElement).style.display = "none";
                         }}
                       />
-                    ) : null}
-                    <div className={`text-muted-foreground flex flex-col items-center gap-2 ${watchImageUrl ? 'hidden' : ''}`}>
-                      <ImageIcon className="w-8 h-8 opacity-50" />
-                      <span className="text-[10px] uppercase tracking-wider font-mono">No Image</span>
-                    </div>
+                    ) : (
+                      <div className="text-muted-foreground flex flex-col items-center gap-2">
+                        <ImageIcon className="w-8 h-8 opacity-50" />
+                        <span className="text-[10px] uppercase tracking-wider font-mono">
+                          No Image
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
 
+              {/* Submit */}
               <div className="pt-4 border-t border-border">
                 {address ? (
-                  <Button type="submit" className="w-full font-mono uppercase tracking-widest font-bold" disabled={txState.status === "pending"}>
-                    {txState.status === "pending" ? (
+                  <Button
+                    type="submit"
+                    className="w-full font-mono uppercase tracking-widest font-bold"
+                    disabled={isPending || CONTRACT_NOT_DEPLOYED}
+                  >
+                    {isPending ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Transmitting...
+                        Transmitting…
                       </>
                     ) : (
                       "Execute Mint"
                     )}
                   </Button>
                 ) : (
-                  <Button type="button" variant="secondary" className="w-full font-mono uppercase tracking-widest font-bold opacity-50 cursor-not-allowed" disabled>
-                    Wallet Required
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="w-full font-mono uppercase tracking-widest font-bold opacity-50 cursor-not-allowed"
+                    disabled
+                  >
+                    Connect Wallet First
                   </Button>
                 )}
               </div>
@@ -221,15 +385,17 @@ export function MintPanel() {
         </CardContent>
       </Card>
 
-      {/* Transaction Status Panel */}
+      {/* ─── Telemetry panel ─────────────────────────────────────────────── */}
       <Card className="border-border bg-card/50 backdrop-blur overflow-hidden relative">
         <div className="absolute inset-0 bg-grid-white/[0.02] bg-[size:16px_16px]" />
         <CardHeader className="relative z-10 border-b border-border/50 pb-4">
           <CardTitle className="font-mono text-lg">Telemetry & Status</CardTitle>
           <CardDescription>Live transaction monitoring.</CardDescription>
         </CardHeader>
+
         <CardContent className="relative z-10 p-6 flex flex-col items-center justify-center min-h-[300px]">
           <AnimatePresence mode="wait">
+            {/* ── Idle ──────────────────────────────────────────────────── */}
             {txState.status === "idle" && (
               <motion.div
                 key="idle"
@@ -241,10 +407,18 @@ export function MintPanel() {
                 <div className="w-16 h-16 rounded-full border border-dashed border-border flex items-center justify-center mb-4">
                   <Activity className="w-8 h-8 opacity-20" />
                 </div>
-                <p className="font-mono text-sm">Awaiting payload...</p>
+                <p className="font-mono text-sm">Awaiting payload…</p>
+                {CONTRACT_NOT_DEPLOYED && (
+                  <p className="font-mono text-[11px] text-yellow-500 mt-3 max-w-[220px] text-center">
+                    Deploy the contract first and set
+                    <br />
+                    <code>VITE_CONTRACT_ADDRESS</code>
+                  </p>
+                )}
               </motion.div>
             )}
 
+            {/* ── Pending ───────────────────────────────────────────────── */}
             {txState.status === "pending" && (
               <motion.div
                 key="pending"
@@ -255,23 +429,29 @@ export function MintPanel() {
               >
                 <div className="relative w-24 h-24 flex items-center justify-center mb-6">
                   <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
-                  <div className="absolute inset-0 rounded-full border-t-2 border-primary animate-spin" style={{ animationDuration: '3s' }} />
-                  <div className="absolute inset-2 rounded-full border-r-2 border-secondary animate-spin" style={{ animationDuration: '1.5s', animationDirection: 'reverse' }} />
+                  <div
+                    className="absolute inset-0 rounded-full border-t-2 border-primary animate-spin"
+                    style={{ animationDuration: "3s" }}
+                  />
+                  <div
+                    className="absolute inset-2 rounded-full border-r-2 border-secondary animate-spin"
+                    style={{
+                      animationDuration: "1.5s",
+                      animationDirection: "reverse",
+                    }}
+                  />
                   <Loader2 className="w-8 h-8 text-primary animate-pulse" />
                 </div>
-                <h3 className="font-mono text-primary font-bold text-lg mb-2">Broadcasting to Network</h3>
+                <h3 className="font-mono text-primary font-bold text-lg mb-2">
+                  Broadcasting to Network
+                </h3>
                 <p className="font-mono text-xs text-muted-foreground max-w-[80%] mx-auto">
-                  Awaiting consensus from Stellar Testnet validators. Please sign the transaction in your wallet if prompted.
+                  {txState.step}
                 </p>
-                {txState.mintId && (
-                  <div className="mt-6 px-4 py-2 bg-background rounded border border-border w-full flex justify-between items-center text-xs font-mono">
-                    <span className="text-muted-foreground">ID</span>
-                    <span>#{txState.mintId}</span>
-                  </div>
-                )}
               </motion.div>
             )}
 
+            {/* ── Success ───────────────────────────────────────────────── */}
             {txState.status === "success" && (
               <motion.div
                 key="success"
@@ -282,37 +462,48 @@ export function MintPanel() {
                 <div className="w-20 h-20 rounded-full bg-green-500/10 border border-green-500/20 flex items-center justify-center mb-6">
                   <CheckCircle2 className="w-10 h-10 text-green-400" />
                 </div>
-                <h3 className="font-mono text-green-400 font-bold text-xl mb-2">Mint Successful</h3>
-                <p className="font-mono text-sm text-muted-foreground mb-6">
-                  Asset has been secured on the ledger.
-                </p>
-                
+                <h3 className="font-mono text-green-400 font-bold text-xl mb-1">
+                  Mint Successful
+                </h3>
+                {txState.tokenId !== undefined && (
+                  <p className="font-mono text-sm text-muted-foreground mb-4">
+                    Token ID: <span className="text-primary font-bold">#{txState.tokenId}</span>
+                  </p>
+                )}
+
                 <div className="w-full bg-background rounded-lg border border-border overflow-hidden text-left">
                   <div className="px-4 py-2 border-b border-border bg-muted/20">
-                    <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">Transaction Receipt</span>
+                    <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Transaction Receipt
+                    </span>
                   </div>
-                  <div className="p-4 space-y-3">
-                    <div className="flex flex-col gap-1">
-                      <span className="font-mono text-[10px] text-muted-foreground">Hash</span>
-                      <a 
-                        href={`https://stellar.expert/explorer/testnet/tx/${txState.txHash}`} 
-                        target="_blank" 
-                        rel="noreferrer"
-                        className="font-mono text-xs text-primary hover:underline flex items-center gap-1 break-all"
-                      >
-                        {txState.txHash}
-                        <ExternalLink className="w-3 h-3 flex-shrink-0" />
-                      </a>
-                    </div>
+                  <div className="p-4">
+                    <span className="font-mono text-[10px] text-muted-foreground block">
+                      Hash
+                    </span>
+                    <a
+                      href={`${STELLAR_EXPERT_BASE}/tx/${txState.txHash}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-mono text-xs text-primary hover:underline flex items-center gap-1 break-all mt-1"
+                    >
+                      {txState.txHash}
+                      <ExternalLink className="w-3 h-3 flex-shrink-0" />
+                    </a>
                   </div>
                 </div>
-                
-                <Button variant="outline" className="mt-6 font-mono" onClick={() => setTxState({ status: "idle" })}>
+
+                <Button
+                  variant="outline"
+                  className="mt-6 font-mono"
+                  onClick={() => setTxState({ status: "idle" })}
+                >
                   Mint Another
                 </Button>
               </motion.div>
             )}
 
+            {/* ── Error ─────────────────────────────────────────────────── */}
             {txState.status === "error" && (
               <motion.div
                 key="error"
@@ -320,17 +511,39 @@ export function MintPanel() {
                 animate={{ opacity: 1, y: 0 }}
                 className="text-center flex flex-col items-center w-full"
               >
-                <div className="w-20 h-20 rounded-full bg-destructive/10 border border-destructive/20 flex items-center justify-center mb-6">
+                <div className="w-20 h-20 rounded-full bg-destructive/10 border border-destructive/20 flex items-center justify-center mb-4">
                   <XCircle className="w-10 h-10 text-destructive" />
                 </div>
-                <h3 className="font-mono text-destructive font-bold text-xl mb-2">Mint Failed</h3>
-                
-                <div className="w-full bg-destructive/5 rounded-lg border border-destructive/20 p-4 text-left mt-2 mb-6">
-                  <p className="font-mono text-xs text-destructive/80 font-medium">Error Details:</p>
-                  <p className="font-mono text-sm text-foreground mt-1">{txState.errorMessage}</p>
+                <h3 className="font-mono text-destructive font-bold text-xl mb-1">
+                  Mint Failed
+                </h3>
+                <p className="font-mono text-[11px] text-muted-foreground uppercase tracking-wider mb-3">
+                  {txState.code}
+                </p>
+
+                <div className="w-full bg-destructive/5 rounded-lg border border-destructive/20 p-4 text-left mb-3">
+                  <p className="font-mono text-[11px] text-destructive/70 font-medium uppercase tracking-wider mb-1">
+                    Error
+                  </p>
+                  <p className="font-mono text-sm text-foreground">
+                    {txState.message}
+                  </p>
                 </div>
-                
-                <Button variant="outline" className="font-mono" onClick={() => setTxState({ status: "idle" })}>
+
+                <div className="w-full bg-muted/10 rounded-lg border border-border p-4 text-left">
+                  <p className="font-mono text-[11px] text-muted-foreground font-medium uppercase tracking-wider mb-1">
+                    Suggestion
+                  </p>
+                  <p className="font-mono text-xs text-foreground">
+                    {txState.suggestion}
+                  </p>
+                </div>
+
+                <Button
+                  variant="outline"
+                  className="mt-6 font-mono"
+                  onClick={() => setTxState({ status: "idle" })}
+                >
                   Acknowledge & Reset
                 </Button>
               </motion.div>

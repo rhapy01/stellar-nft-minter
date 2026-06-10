@@ -1,0 +1,25 @@
+{
+  "buildCommand": "pnpm --filter @workspace/stellar-nft-minter run build",
+  "outputDirectory": "artifacts/stellar-nft-minter/dist/public",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Cross-Origin-Opener-Policy",
+          "value": "same-origin-allow-popups"
+        },
+        {
+          "key": "Cross-Origin-Embedder-Policy",
+          "value": "unsafe-none"
+        }
+      ]
+    }
+  ],
+  "env": {
+    "VITE_CONTRACT_ADDRESS": "@stellar_nft_contract_address"
+  }
+}
