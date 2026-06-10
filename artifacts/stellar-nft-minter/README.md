@@ -10,7 +10,7 @@ A fully on-chain NFT minting application on **Stellar Testnet** using **Soroban 
 
 ![Mint success](./public/mint-success-screenshot.png)
 
-Verified testnet mint: **Cosmic Voyager #001** (Token #1)
+Verified testnet mint: **Cosmic Voyager #001** (Token #1) — [tx on Stellar Expert](https://stellar.expert/explorer/testnet/tx/c2d3d399b46ab48234ee4d10b1931dd91ca831a5854a24bc6b2a8b9e7560fa90)
 
 ## Features
 

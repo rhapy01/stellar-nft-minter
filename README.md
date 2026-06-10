@@ -14,7 +14,7 @@ Multi-wallet NFT minting on **Stellar Testnet** using **Soroban** smart contract
 |---|---|
 | ![App screenshot](./artifacts/stellar-nft-minter/public/mint-app-screenshot.png) | ![Mint success](./artifacts/stellar-nft-minter/public/mint-success-screenshot.png) |
 
-Example mint: **Cosmic Voyager #001** · Token **#1** · [View tx on Stellar Expert](https://stellar.expert/explorer/testnet)
+Example mint: **Cosmic Voyager #001** · Token **#1** · [View transaction on Stellar Expert](https://stellar.expert/explorer/testnet/tx/c2d3d399b46ab48234ee4d10b1931dd91ca831a5854a24bc6b2a8b9e7560fa90)
 
 ## Features
 
