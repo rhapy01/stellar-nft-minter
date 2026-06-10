@@ -1,17 +1,7 @@
-// ─── Activity Feed ────────────────────────────────────────────────────────────
-//
-// Polls Soroban contract events every 10 s and shows the most recent mints.
-// Each row lazy-fetches NFT metadata via a separate query to display the image.
-
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  ExternalLink,
-  Clock,
-  AlertTriangle,
-  Hexagon,
-} from "lucide-react";
+import { ExternalLink, Clock, Hexagon } from "lucide-react";
 import {
   getMintEvents,
   getNFTMetadata,
@@ -25,8 +15,6 @@ function truncate(s: string, front = 6, back = 4): string {
   if (s.length <= front + back + 3) return s;
   return `${s.slice(0, front)}…${s.slice(-back)}`;
 }
-
-// ─── Main component ───────────────────────────────────────────────────────────
 
 export function ActivityFeed() {
   const { data: ledger } = useQuery({
@@ -47,53 +35,41 @@ export function ActivityFeed() {
   const sortedEvents = events ? [...events].reverse() : [];
 
   return (
-    <Card className="border-border bg-card/50 backdrop-blur flex flex-col h-[500px]">
-      <CardHeader className="border-b border-border/50 pb-4 shrink-0">
-        <CardTitle className="font-mono text-lg flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-          Live Ledger Feed
-        </CardTitle>
-        <p className="text-[11px] text-muted-foreground font-mono">
-          Soroban contract events · refreshes every 10 s
+    <Card className="border-border/60 bg-card/60 flex flex-col lg:sticky lg:top-24 lg:max-h-[calc(100vh-8rem)]">
+      <CardHeader className="pb-4 shrink-0">
+        <CardTitle className="text-lg font-semibold">Recent mints</CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Updates every 10 seconds
         </p>
       </CardHeader>
 
-      <CardContent className="p-0 overflow-y-auto flex-1">
+      <CardContent className="p-0 overflow-y-auto flex-1 min-h-[280px]">
         {CONTRACT_NOT_DEPLOYED ? (
-          <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-6 text-center gap-3">
-            <AlertTriangle className="w-8 h-8 opacity-40 text-yellow-500" />
-            <p className="font-mono text-sm font-semibold">Contract not deployed</p>
-            <p className="font-mono text-xs opacity-60 max-w-[220px] text-center">
-              Run <code className="bg-muted/30 px-1">scripts/deploy-contract.mjs</code>{" "}
-              and set the <code className="bg-muted/30 px-1">VITE_CONTRACT_ADDRESS</code>{" "}
-              env var.
-            </p>
+          <div className="h-full flex items-center justify-center text-muted-foreground p-8 text-center text-sm">
+            Contract not configured
           </div>
         ) : isLoading ? (
-          <div className="p-4 space-y-4">
+          <div className="p-4 space-y-3">
             {[1, 2, 3].map(i => (
-              <div
-                key={i}
-                className="flex gap-4 p-3 rounded-lg border border-border/50 bg-background/50"
-              >
-                <Skeleton className="w-12 h-12 rounded" />
-                <div className="flex-1 space-y-2">
-                  <Skeleton className="h-4 w-1/3" />
-                  <Skeleton className="h-3 w-1/4" />
+              <div key={i} className="flex gap-3 p-3">
+                <Skeleton className="w-12 h-12 rounded-lg" />
+                <div className="flex-1 space-y-2 pt-1">
+                  <Skeleton className="h-4 w-2/3" />
+                  <Skeleton className="h-3 w-1/3" />
                 </div>
               </div>
             ))}
           </div>
         ) : sortedEvents.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-6 text-center">
-            <Clock className="w-8 h-8 opacity-20 mb-3" />
-            <p className="font-mono text-sm">No mints detected yet.</p>
-            <p className="font-mono text-xs opacity-60 mt-1">
-              Mint your first NFT to see it here!
+          <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-8 text-center">
+            <Clock className="w-8 h-8 opacity-25 mb-3" />
+            <p className="text-sm">No mints yet</p>
+            <p className="text-xs mt-1 opacity-70">
+              Your mints will show up here
             </p>
           </div>
         ) : (
-          <div className="divide-y divide-border/50">
+          <div className="divide-y divide-border/40">
             {sortedEvents.map(event => (
               <ActivityEventRow key={event.id} event={event} />
             ))}
@@ -104,8 +80,6 @@ export function ActivityFeed() {
   );
 }
 
-// ─── Single event row ─────────────────────────────────────────────────────────
-
 function ActivityEventRow({ event }: { event: MintEvent }) {
   const { data: metadata } = useQuery({
     queryKey: ["nft_metadata", event.tokenId],
@@ -115,9 +89,8 @@ function ActivityEventRow({ event }: { event: MintEvent }) {
   });
 
   return (
-    <div className="p-4 flex gap-4 hover:bg-muted/10 transition-colors">
-      {/* Thumbnail */}
-      <div className="w-14 h-14 rounded border border-border overflow-hidden bg-muted/30 flex-shrink-0 flex items-center justify-center">
+    <div className="px-4 py-4 flex gap-3 hover:bg-muted/10 transition-colors">
+      <div className="w-12 h-12 rounded-lg border border-border/60 overflow-hidden bg-muted/30 shrink-0 flex items-center justify-center">
         {metadata?.imageUrl ? (
           <img
             src={metadata.imageUrl}
@@ -128,48 +101,31 @@ function ActivityEventRow({ event }: { event: MintEvent }) {
             }}
           />
         ) : (
-          <Hexagon className="w-6 h-6 text-muted-foreground opacity-40" />
+          <Hexagon className="w-5 h-5 text-muted-foreground opacity-40" />
         )}
       </div>
 
-      {/* Details */}
       <div className="flex-1 min-w-0">
-        <div className="flex justify-between items-start mb-1">
-          <h4 className="font-mono text-sm font-bold truncate text-foreground pr-2">
+        <div className="flex justify-between gap-2">
+          <p className="font-medium text-sm truncate">
             {metadata?.name || `NFT #${event.tokenId}`}
-          </h4>
-          <span className="text-[10px] font-mono text-muted-foreground whitespace-nowrap">
+          </p>
+          <span className="text-xs text-muted-foreground shrink-0">
             #{event.tokenId}
           </span>
         </div>
-
-        <div className="grid grid-cols-2 gap-x-2 gap-y-1 mt-2">
-          <div className="flex flex-col">
-            <span className="text-[9px] uppercase font-mono text-muted-foreground">
-              Minter
-            </span>
-            <span
-              className="font-mono text-xs text-secondary truncate"
-              title={event.owner}
-            >
-              {truncate(event.owner)}
-            </span>
-          </div>
-          <div className="flex flex-col items-end text-right">
-            <span className="text-[9px] uppercase font-mono text-muted-foreground">
-              Ledger
-            </span>
-            <a
-              href={`${STELLAR_EXPERT_BASE}/ledger/${event.ledger}`}
-              target="_blank"
-              rel="noreferrer"
-              className="font-mono text-xs text-primary hover:underline flex items-center gap-1"
-            >
-              {event.ledger.toLocaleString()}
-              <ExternalLink className="w-3 h-3 flex-shrink-0" />
-            </a>
-          </div>
-        </div>
+        <p className="text-xs text-muted-foreground mt-1">
+          {truncate(event.owner)}
+        </p>
+        <a
+          href={`${STELLAR_EXPERT_BASE}/ledger/${event.ledger}`}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1.5"
+        >
+          Ledger {event.ledger.toLocaleString()}
+          <ExternalLink className="w-3 h-3" />
+        </a>
       </div>
     </div>
   );

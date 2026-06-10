@@ -1,16 +1,29 @@
 import { useWallet, type WalletType } from "./wallet-context";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Activity, LogOut, Wallet } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { LogOut, Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getSupportedWallets, WALLET_TYPE_TO_ID, WALLET_LABELS } from "@/lib/wallet";
+import {
+  getSupportedWallets,
+  WALLET_TYPE_TO_ID,
+  WALLET_LABELS,
+} from "@/lib/wallet";
 
 const WALLET_OPTIONS: WalletType[] = ["freighter", "albedo"];
 
 export function Header() {
   const { address, isConnecting, connect, disconnect } = useWallet();
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [availability, setAvailability] = useState<Record<string, boolean>>({});
+  const [availability, setAvailability] = useState<Record<string, boolean>>(
+    {},
+  );
 
   useEffect(() => {
     if (!isModalOpen) return;
@@ -21,78 +34,74 @@ export function Header() {
     });
   }, [isModalOpen]);
 
-  const truncateAddress = (addr: string) => `${addr.substring(0, 5)}...${addr.substring(addr.length - 4)}`;
+  const truncateAddress = (addr: string) =>
+    `${addr.substring(0, 6)}…${addr.substring(addr.length - 4)}`;
 
   return (
-    <header className="border-b border-border/50 bg-background/80 backdrop-blur sticky top-0 z-50">
-      <div className="container mx-auto px-4 h-16 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded bg-primary/20 flex items-center justify-center border border-primary/50 text-primary">
-            <Activity className="w-5 h-5" />
-          </div>
-          <span className="font-bold text-lg tracking-tight font-mono">STELLAR<span className="text-primary">MINTER</span></span>
-          <div className="ml-4 px-2 py-1 rounded-sm bg-secondary/10 border border-secondary/20 text-secondary text-[10px] font-mono uppercase font-bold flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-secondary animate-pulse" />
-            Testnet
-          </div>
-        </div>
+    <header className="border-b border-border/40 bg-background/70 backdrop-blur-md sticky top-0 z-50">
+      <div className="container mx-auto px-6 h-16 flex items-center justify-between max-w-6xl">
+        <span className="font-semibold text-lg tracking-tight">
+          Stellar<span className="text-primary">Minter</span>
+        </span>
 
         <div>
           {address ? (
-            <div className="flex items-center gap-3">
-              <div className="px-3 py-1.5 rounded bg-muted/30 border border-border flex items-center gap-2 text-sm font-mono">
-                <Wallet className="w-4 h-4 text-muted-foreground" />
-                <span className="text-foreground">{truncateAddress(address)}</span>
+            <div className="flex items-center gap-2">
+              <div className="hidden sm:flex items-center gap-2 rounded-full border border-border/60 bg-card/50 px-3 py-1.5 text-sm">
+                <span className="w-2 h-2 rounded-full bg-green-400" />
+                <span className="text-muted-foreground">{truncateAddress(address)}</span>
               </div>
-              <Button variant="ghost" size="icon" onClick={disconnect} title="Disconnect" className="text-muted-foreground hover:text-destructive hover:bg-destructive/10">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={disconnect}
+                className="gap-2"
+              >
                 <LogOut className="w-4 h-4" />
+                <span className="hidden sm:inline">Disconnect</span>
               </Button>
             </div>
           ) : (
             <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
               <DialogTrigger asChild>
-                <Button className="font-mono uppercase text-xs tracking-wider" variant="outline">
-                  Connect Wallet
+                <Button size="sm" className="gap-2">
+                  <Wallet className="w-4 h-4" />
+                  Connect wallet
                 </Button>
               </DialogTrigger>
-              <DialogContent className="sm:max-w-md bg-card border-border">
+              <DialogContent className="sm:max-w-sm">
                 <DialogHeader>
-                  <DialogTitle className="font-mono text-xl">Connect Wallet</DialogTitle>
+                  <DialogTitle>Connect wallet</DialogTitle>
                   <DialogDescription>
-                    Select a wallet via StellarWalletsKit to connect to Testnet.
+                    Choose a wallet to connect to Stellar Testnet.
                   </DialogDescription>
                 </DialogHeader>
-                <div className="flex flex-col gap-3 mt-4">
+                <div className="flex flex-col gap-2 mt-2">
                   {WALLET_OPTIONS.map(type => {
                     const walletId = WALLET_TYPE_TO_ID[type];
                     const label = WALLET_LABELS[type];
                     const unavailable =
-                      type === "freighter" && isModalOpen && availability[walletId] === false;
+                      type === "freighter" &&
+                      isModalOpen &&
+                      availability[walletId] === false;
 
                     return (
                       <Button
                         key={type}
                         variant="outline"
-                        className="h-16 justify-start px-6 gap-4 text-lg bg-background hover:bg-primary/10 hover:border-primary hover:text-primary transition-all disabled:opacity-50"
+                        className="h-12 justify-start"
                         onClick={() => {
                           connect(type);
                           setIsModalOpen(false);
                         }}
                         disabled={isConnecting || unavailable}
                       >
-                        <div className="w-8 h-8 rounded bg-muted flex items-center justify-center">
-                          <span className="font-bold text-xl leading-none -mt-0.5">
-                            {label[0]}
+                        {label}
+                        {unavailable && (
+                          <span className="ml-auto text-xs text-muted-foreground">
+                            Not installed
                           </span>
-                        </div>
-                        <div className="flex flex-col items-start">
-                          <span>{label}</span>
-                          {unavailable && (
-                            <span className="text-[10px] text-muted-foreground font-mono normal-case">
-                              Extension not installed
-                            </span>
-                          )}
-                        </div>
+                        )}
                       </Button>
                     );
                   })}
