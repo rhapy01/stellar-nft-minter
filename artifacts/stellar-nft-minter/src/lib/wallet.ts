@@ -1,189 +1,151 @@
-// ─── Multi-wallet integration ─────────────────────────────────────────────────
+// ─── StellarWalletsKit integration ────────────────────────────────────────────
 //
-// Supports:
-//   • Freighter  — browser extension via @stellar/freighter-api
-//   • Albedo     — web wallet via postMessage (no npm package needed)
+// Multi-wallet support via @creit.tech/stellar-wallets-kit (Freighter + Albedo).
+// The kit provides a unified connect / sign API and normalizes wallet errors.
 
+import { StellarWalletsKit } from '@creit.tech/stellar-wallets-kit/sdk';
 import {
-  isConnected,
-  requestAccess,
-  getAddress,
-  signTransaction,
-} from '@stellar/freighter-api';
+  FREIGHTER_ID,
+  FreighterModule,
+} from '@creit.tech/stellar-wallets-kit/modules/freighter';
+import {
+  ALBEDO_ID,
+  AlbedoModule,
+} from '@creit.tech/stellar-wallets-kit/modules/albedo';
+import {
+  Networks,
+  KitEventType,
+  type ISupportedWallet,
+} from '@creit.tech/stellar-wallets-kit/types';
+import { NETWORK_PASSPHRASE } from './constants';
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  FREIGHTER
-// ─────────────────────────────────────────────────────────────────────────────
+export type WalletType = 'freighter' | 'albedo';
 
-/** Returns true if the Freighter extension is installed and responsive. */
-export async function isFreighterAvailable(): Promise<boolean> {
+export const WALLET_TYPE_TO_ID: Record<WalletType, string> = {
+  freighter: FREIGHTER_ID,
+  albedo: ALBEDO_ID,
+};
+
+export const WALLET_LABELS: Record<WalletType, string> = {
+  freighter: 'Freighter',
+  albedo: 'Albedo',
+};
+
+let initialized = false;
+
+/** Initialize the kit once (Freighter + Albedo modules on Testnet). */
+export function initWalletKit(): void {
+  if (initialized) return;
+  StellarWalletsKit.init({
+    modules: [new FreighterModule(), new AlbedoModule()],
+    network: Networks.TESTNET,
+  });
+  initialized = true;
+}
+
+/** List supported wallets and whether each is available in the browser. */
+export async function getSupportedWallets(): Promise<ISupportedWallet[]> {
+  initWalletKit();
+  return StellarWalletsKit.refreshSupportedWallets();
+}
+
+/**
+ * Connect a specific wallet and return the user's public key.
+ * Throws with a `code` field for wallet-not-found / user-denied cases.
+ */
+export async function connectWallet(type: WalletType): Promise<string> {
+  initWalletKit();
+  const walletId = WALLET_TYPE_TO_ID[type];
+
   try {
-    const res = await isConnected();
-    return (res as any).isConnected === true || (res as any) === true;
-  } catch {
-    return false;
+    StellarWalletsKit.setWallet(walletId);
+    const { address } = await StellarWalletsKit.fetchAddress();
+    return address;
+  } catch (err) {
+    throw normalizeKitError(err, type);
   }
 }
 
 /**
- * Connect to Freighter and return the user's public key.
- * Throws a descriptive error if the wallet is not found or the user rejects.
+ * Sign a prepared transaction XDR with the active wallet.
+ * Returns the signed XDR string.
  */
-export async function connectFreighter(): Promise<string> {
-  const available = await isFreighterAvailable();
-  if (!available) {
-    throw Object.assign(
-      new Error('Freighter wallet not found. Install from freighter.app'),
+export async function signTransactionXdr(
+  xdr: string,
+  address: string,
+): Promise<string> {
+  initWalletKit();
+  try {
+    const { signedTxXdr } = await StellarWalletsKit.signTransaction(xdr, {
+      networkPassphrase: NETWORK_PASSPHRASE,
+      address,
+    });
+    return signedTxXdr;
+  } catch (err) {
+    throw normalizeKitError(err);
+  }
+}
+
+/** Disconnect the active wallet session. */
+export async function disconnectWallet(): Promise<void> {
+  initWalletKit();
+  await StellarWalletsKit.disconnect();
+}
+
+/** Subscribe to kit state changes (address / network updates). */
+export function onWalletStateChange(
+  callback: (address: string | undefined) => void,
+): () => void {
+  initWalletKit();
+  return StellarWalletsKit.on(KitEventType.STATE_UPDATED, event => {
+    callback(event.payload.address);
+  });
+}
+
+interface KitErrorShape {
+  code?: number;
+  message?: string;
+}
+
+/** Map StellarWalletsKit errors to app-friendly Error objects with codes. */
+function normalizeKitError(err: unknown, walletType?: WalletType): Error {
+  const kitErr = err as KitErrorShape;
+  const msg =
+    kitErr?.message ??
+    (err instanceof Error ? err.message : String(err));
+  const lower = msg.toLowerCase();
+
+  if (
+    lower.includes('not connected') ||
+    lower.includes('not found') ||
+    lower.includes('not installed') ||
+    lower.includes('is not connected') ||
+    (walletType === 'freighter' && lower.includes('freighter'))
+  ) {
+    return Object.assign(
+      new Error(
+        walletType === 'freighter'
+          ? 'Freighter wallet not found. Install from freighter.app'
+          : msg,
+      ),
       { code: 'WALLET_NOT_FOUND' },
     );
   }
 
-  const result = await requestAccess();
-  const err = (result as any)?.error;
-  if (err) {
-    const msg: string = err;
-    if (
-      msg.toLowerCase().includes('denied') ||
-      msg.toLowerCase().includes('reject')
-    ) {
-      throw Object.assign(new Error('Connection denied by user'), {
-        code: 'USER_DENIED',
-      });
-    }
-    throw new Error(msg);
+  if (
+    lower.includes('denied') ||
+    lower.includes('rejected') ||
+    lower.includes('declined') ||
+    lower.includes('cancelled') ||
+    lower.includes('canceled') ||
+    lower.includes('closed the modal') ||
+    lower.includes('closed')
+  ) {
+    return Object.assign(new Error('Transaction rejected by user'), {
+      code: 'USER_DENIED',
+    });
   }
-  return (result as any).address ?? (result as unknown as string);
-}
 
-/** Get the currently connected Freighter address without re-requesting access. */
-export async function getFreighterAddress(): Promise<string> {
-  const result = await getAddress();
-  const err = (result as any)?.error;
-  if (err) throw new Error(err as string);
-  return (result as any).address ?? (result as unknown as string);
-}
-
-/**
- * Sign a transaction XDR with Freighter.
- * Returns the signed XDR string.
- */
-export async function signWithFreighter(
-  xdr: string,
-  networkPassphrase: string,
-): Promise<string> {
-  const result = await signTransaction(xdr, { networkPassphrase });
-  const err = (result as any)?.error;
-  if (err) {
-    const msg: string = err;
-    if (
-      msg.toLowerCase().includes('declined') ||
-      msg.toLowerCase().includes('denied') ||
-      msg.toLowerCase().includes('reject')
-    ) {
-      throw Object.assign(new Error('Transaction rejected by user'), {
-        code: 'USER_DENIED',
-      });
-    }
-    throw new Error(msg);
-  }
-  return (result as any).signedTxXdr ?? (result as unknown as string);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  ALBEDO  (no npm package — uses postMessage / popup API directly)
-//  Docs: https://albedo.link/docs
-// ─────────────────────────────────────────────────────────────────────────────
-
-const ALBEDO_ORIGIN = 'https://albedo.link';
-
-function openAlbedoPopup(url: string): Window {
-  const popup = window.open(
-    url,
-    'albedo_popup',
-    'width=450,height=680,resizable=no,scrollbars=yes',
-  );
-  if (!popup) {
-    throw new Error(
-      'Popup blocked. Allow popups for this site in your browser settings.',
-    );
-  }
-  return popup;
-}
-
-function waitForAlbedoMessage(popup: Window): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    const handler = (event: MessageEvent) => {
-      if (event.origin !== ALBEDO_ORIGIN) return;
-      cleanup();
-      popup.close();
-      if (event.data?.error) {
-        reject(new Error(String(event.data.error)));
-      } else {
-        resolve(event.data as Record<string, unknown>);
-      }
-    };
-
-    const closedCheck = setInterval(() => {
-      if (popup.closed) {
-        cleanup();
-        reject(new Error('Albedo window was closed'));
-      }
-    }, 500);
-
-    // Auto-timeout after 2 minutes
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error('Albedo request timed out'));
-    }, 120_000);
-
-    function cleanup() {
-      window.removeEventListener('message', handler);
-      clearInterval(closedCheck);
-      clearTimeout(timeout);
-    }
-
-    window.addEventListener('message', handler);
-  });
-}
-
-/** Connect Albedo and return the user's Stellar public key. */
-export async function connectAlbedo(): Promise<string> {
-  const token = generateToken();
-  const popup = openAlbedoPopup(
-    `${ALBEDO_ORIGIN}/intent/public_key?token=${token}&callback=postMessage`,
-  );
-  const data = await waitForAlbedoMessage(popup);
-  if (!data.pubkey) throw new Error('Albedo did not return a public key');
-  return data.pubkey as string;
-}
-
-/**
- * Sign a transaction XDR via Albedo.
- * Returns the signed envelope XDR.
- */
-export async function signWithAlbedo(
-  xdr: string,
-  network: 'TESTNET' | 'PUBLIC',
-): Promise<string> {
-  const token = generateToken();
-  const params = new URLSearchParams({
-    xdr,
-    network: network.toLowerCase(),
-    submit: 'false',
-    callback: 'postMessage',
-    token,
-  });
-  const popup = openAlbedoPopup(
-    `${ALBEDO_ORIGIN}/intent/tx?${params.toString()}`,
-  );
-  const data = await waitForAlbedoMessage(popup);
-  if (!data.signed_envelope_xdr) {
-    throw new Error('Albedo did not return a signed transaction');
-  }
-  return data.signed_envelope_xdr as string;
-}
-
-function generateToken(): string {
-  if (typeof crypto?.randomUUID === 'function') return crypto.randomUUID();
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  if (err instanceof Error) return err;
+  return new Error(msg);
 }

@@ -4,7 +4,7 @@
 //   1. Validates inputs
 //   2. Checks XLM balance (≥ 0.5 XLM required)
 //   3. Builds & simulates the Soroban `mint` transaction
-//   4. Signs via connected wallet (Freighter or Albedo)
+//   4. Signs via StellarWalletsKit (Freighter or Albedo)
 //   5. Submits to Stellar Testnet
 //   6. Polls for confirmation and shows the tx hash
 

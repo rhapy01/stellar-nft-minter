@@ -1,26 +1,25 @@
 // ─── Wallet Context ───────────────────────────────────────────────────────────
 //
-// Manages Freighter and Albedo wallet connections.
-// Provides: address, walletType, connect(), disconnect(), signTx()
+// React state layer on top of StellarWalletsKit (Freighter + Albedo).
 
 import {
   createContext,
   useContext,
   useState,
   useCallback,
+  useEffect,
   type ReactNode,
 } from "react";
 import { toast } from "sonner";
 import {
-  isFreighterAvailable,
-  connectFreighter,
-  signWithFreighter,
-  connectAlbedo,
-  signWithAlbedo,
+  type WalletType,
+  connectWallet,
+  disconnectWallet,
+  signTransactionXdr,
+  onWalletStateChange,
+  initWalletKit,
 } from "@/lib/wallet";
-import { NETWORK_PASSPHRASE } from "@/lib/constants";
-
-export type WalletType = "freighter" | "albedo";
+import { classifyError } from "@/lib/errors";
 
 interface WalletContextState {
   address: string | null;
@@ -39,51 +38,39 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [walletType, setWalletType] = useState<WalletType | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
 
+  useEffect(() => {
+    initWalletKit();
+    return onWalletStateChange(kitAddress => {
+      if (!kitAddress) {
+        setAddress(null);
+        setWalletType(null);
+      }
+    });
+  }, []);
+
   const connect = useCallback(async (type: WalletType) => {
     setIsConnecting(true);
     try {
-      let pubkey: string;
-
-      if (type === "freighter") {
-        pubkey = await connectFreighter();
-      } else {
-        pubkey = await connectAlbedo();
-      }
-
+      const pubkey = await connectWallet(type);
       setAddress(pubkey);
       setWalletType(type);
 
       toast.success(
         type === "freighter" ? "Freighter Connected" : "Albedo Connected",
-        { description: `Connected to Stellar Testnet · ${pubkey.slice(0, 6)}…${pubkey.slice(-4)}` },
+        {
+          description: `Connected to Stellar Testnet · ${pubkey.slice(0, 6)}…${pubkey.slice(-4)}`,
+        },
       );
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const lower = msg.toLowerCase();
-
-      if (lower.includes("not found") || lower.includes("install")) {
-        toast.error("Wallet Not Found", {
-          description:
-            type === "freighter"
-              ? "Install the Freighter extension from freighter.app and reload."
-              : msg,
-        });
-      } else if (
-        lower.includes("denied") ||
-        lower.includes("rejected") ||
-        lower.includes("closed") ||
-        lower.includes("cancel")
-      ) {
+      const classified = classifyError(err);
+      if (classified.code === "WALLET_NOT_FOUND") {
+        toast.error("Wallet Not Found", { description: classified.suggestion });
+      } else if (classified.code === "USER_DENIED") {
         toast.error("Connection Cancelled", {
-          description: "You closed the wallet dialog.",
-        });
-      } else if (lower.includes("popup") || lower.includes("blocked")) {
-        toast.error("Popup Blocked", {
-          description:
-            "Allow popups for this site in your browser, then try Albedo again.",
+          description: classified.suggestion,
         });
       } else {
-        toast.error("Connection Failed", { description: msg });
+        toast.error("Connection Failed", { description: classified.message });
       }
     } finally {
       setIsConnecting(false);
@@ -91,6 +78,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const disconnect = useCallback(() => {
+    void disconnectWallet();
     setAddress(null);
     setWalletType(null);
     toast.info("Wallet Disconnected");
@@ -98,13 +86,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const signTx = useCallback(
     async (xdr: string): Promise<string> => {
-      if (!walletType) throw new Error("No wallet connected");
-      if (walletType === "freighter") {
-        return signWithFreighter(xdr, NETWORK_PASSPHRASE);
-      }
-      return signWithAlbedo(xdr, "TESTNET");
+      if (!address) throw new Error("No wallet connected");
+      return signTransactionXdr(xdr, address);
     },
-    [walletType],
+    [address],
   );
 
   return (
@@ -121,3 +106,5 @@ export function useWallet() {
   if (!ctx) throw new Error("useWallet must be used within WalletProvider");
   return ctx;
 }
+
+export type { WalletType };

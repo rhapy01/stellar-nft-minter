@@ -29,6 +29,29 @@ export interface MintError {
 
 /** Map a caught error to a user-friendly MintError. */
 export function classifyError(err: unknown): MintError {
+  const code =
+    typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code: unknown }).code)
+      : undefined;
+
+  if (code === ErrorCode.WALLET_NOT_FOUND) {
+    return {
+      code: ErrorCode.WALLET_NOT_FOUND,
+      message: 'Wallet not found',
+      suggestion:
+        'Install the Freighter browser extension from freighter.app, or use Albedo (web wallet). Then try again.',
+    };
+  }
+
+  if (code === ErrorCode.USER_DENIED) {
+    return {
+      code: ErrorCode.USER_DENIED,
+      message: 'Transaction rejected',
+      suggestion:
+        'You declined the transaction in your wallet. Click "Execute Mint" again when ready.',
+    };
+  }
+
   const raw = err instanceof Error ? err.message : String(err);
   const lower = raw.toLowerCase();
 

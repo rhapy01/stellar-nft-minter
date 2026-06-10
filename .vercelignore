@@ -1,0 +1,7 @@
+node_modules
+.git
+.local
+contracts/nft/target
+artifacts/**/node_modules
+**/.tsbuildinfo
+**/dist

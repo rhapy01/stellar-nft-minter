@@ -1,12 +1,25 @@
-import { useWallet } from "./wallet-context";
+import { useWallet, type WalletType } from "./wallet-context";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Activity, LogOut, Wallet } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { getSupportedWallets, WALLET_TYPE_TO_ID, WALLET_LABELS } from "@/lib/wallet";
+
+const WALLET_OPTIONS: WalletType[] = ["freighter", "albedo"];
 
 export function Header() {
   const { address, isConnecting, connect, disconnect } = useWallet();
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [availability, setAvailability] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (!isModalOpen) return;
+    void getSupportedWallets().then(wallets => {
+      const map: Record<string, boolean> = {};
+      for (const w of wallets) map[w.id] = w.isAvailable;
+      setAvailability(map);
+    });
+  }, [isModalOpen]);
 
   const truncateAddress = (addr: string) => `${addr.substring(0, 5)}...${addr.substring(addr.length - 4)}`;
 
@@ -46,38 +59,43 @@ export function Header() {
                 <DialogHeader>
                   <DialogTitle className="font-mono text-xl">Connect Wallet</DialogTitle>
                   <DialogDescription>
-                    Select a wallet provider to connect to the Stellar Testnet.
+                    Select a wallet via StellarWalletsKit to connect to Testnet.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="flex flex-col gap-3 mt-4">
-                  <Button 
-                    variant="outline" 
-                    className="h-16 justify-start px-6 gap-4 text-lg bg-background hover:bg-primary/10 hover:border-primary hover:text-primary transition-all"
-                    onClick={() => {
-                      connect("freighter");
-                      setIsModalOpen(false);
-                    }}
-                    disabled={isConnecting}
-                  >
-                    <div className="w-8 h-8 rounded bg-muted flex items-center justify-center">
-                      <span className="font-bold text-xl leading-none -mt-0.5">F</span>
-                    </div>
-                    Freighter
-                  </Button>
-                  <Button 
-                    variant="outline" 
-                    className="h-16 justify-start px-6 gap-4 text-lg bg-background hover:bg-secondary/10 hover:border-secondary hover:text-secondary transition-all"
-                    onClick={() => {
-                      connect("albedo");
-                      setIsModalOpen(false);
-                    }}
-                    disabled={isConnecting}
-                  >
-                    <div className="w-8 h-8 rounded bg-muted flex items-center justify-center">
-                      <span className="font-bold text-xl leading-none -mt-0.5">A</span>
-                    </div>
-                    Albedo
-                  </Button>
+                  {WALLET_OPTIONS.map(type => {
+                    const walletId = WALLET_TYPE_TO_ID[type];
+                    const label = WALLET_LABELS[type];
+                    const unavailable =
+                      type === "freighter" && isModalOpen && availability[walletId] === false;
+
+                    return (
+                      <Button
+                        key={type}
+                        variant="outline"
+                        className="h-16 justify-start px-6 gap-4 text-lg bg-background hover:bg-primary/10 hover:border-primary hover:text-primary transition-all disabled:opacity-50"
+                        onClick={() => {
+                          connect(type);
+                          setIsModalOpen(false);
+                        }}
+                        disabled={isConnecting || unavailable}
+                      >
+                        <div className="w-8 h-8 rounded bg-muted flex items-center justify-center">
+                          <span className="font-bold text-xl leading-none -mt-0.5">
+                            {label[0]}
+                          </span>
+                        </div>
+                        <div className="flex flex-col items-start">
+                          <span>{label}</span>
+                          {unavailable && (
+                            <span className="text-[10px] text-muted-foreground font-mono normal-case">
+                              Extension not installed
+                            </span>
+                          )}
+                        </div>
+                      </Button>
+                    );
+                  })}
                 </div>
               </DialogContent>
             </Dialog>
