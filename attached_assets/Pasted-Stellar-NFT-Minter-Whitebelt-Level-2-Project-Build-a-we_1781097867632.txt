@@ -1,0 +1,92 @@
+Stellar NFT Minter - Whitebelt Level 2 Project
+Build a web application that allows users to mint NFTs on the Stellar Testnet. The app should support multi-wallet connections, deploy a smart contract, and provide real-time minting status with event listening.
+Core Requirements:
+1. Multi-Wallet Integration
+Support multiple wallet types (Freighter, Albedo, or other Stellar wallets)
+Allow users to connect and disconnect wallets
+Display connected wallet address and network (Testnet)
+Handle wallet not found errors gracefully
+2. Smart Contract Deployment
+Deploy an NFT smart contract to Stellar Testnet
+Contract should have a mint function that creates NFTs
+Store NFT metadata (name, description, image URL, owner)
+Include proper access control (only contract owner can mint, or public minting with fees)
+Document the deployed contract address
+3. NFT Minting Interface
+Create a form for users to input NFT metadata:
+NFT Name
+Description
+Image URL (or upload capability)
+Optional: Additional metadata fields
+Validate all inputs before submission
+Show clear instructions for users
+4. Contract Interaction from Frontend
+Call the smart contract's mint function when user submits the form
+Pass metadata to the contract
+Handle transaction signing through the connected wallet
+Manage transaction nonce and sequence numbers properly
+5. Transaction Status Tracking
+Show real-time transaction status:
+Pending (transaction submitted, waiting for confirmation)
+Success (NFT minted, show transaction hash and NFT details)
+Failed (show error message and reason)
+Display transaction hash with link to Stellar Explorer
+Update UI based on transaction state
+Allow users to check status of previous mints
+6. Event Listening & Real-Time Updates
+Listen for NFT mint events emitted by the contract
+Display live notifications when NFTs are minted
+Show event details (minter address, NFT ID, timestamp)
+Update a feed or dashboard with recent mint activity
+7. Error Handling (Minimum 3 Types)
+Wallet Errors: Wallet not found, connection rejected, user denied transaction
+Insufficient Balance: Show clear message if user doesn't have enough XLM for fees
+Contract Errors: Invalid metadata, contract call failed, transaction reverted
+Network Errors: Connection timeouts, RPC failures
+Provide helpful error messages and recovery suggestions for each
+8. Code Quality & Organization
+Clean, modular code structure
+Proper separation of concerns (wallet logic, contract logic, UI)
+Comprehensive error handling throughout
+Input validation and sanitization
+Comments explaining key functions
+Minimum 2+ meaningful commits with clear commit messages
+UI/UX Requirements:
+Professional, clean design
+Clear wallet connection status indicator
+Prominent minting form with validation feedback
+Real-time transaction status display
+Activity feed showing recent mints
+Responsive design (mobile and desktop)
+Loading states and disabled states for buttons
+Success/error notifications
+Deliverables:
+Public GitHub repository with all code
+README with:
+Project description and features
+Setup and installation instructions
+How to use the app
+Deployed contract address on Stellar Testnet
+Transaction hash of a successful mint (verifiable on Stellar Expert)
+Screenshots showing wallet options and minting interface
+Optional: Live demo link (deployed on Vercel, Netlify, etc.)
+Minimum 2+ meaningful commits showing development progress
+Contract source code included in repository
+Environment setup guide (testnet configuration, wallet setup)
+Key Features to Implement:
+Multi-wallet support with clear UI indicators
+Real-time minting status with visual feedback
+Event streaming dashboard showing recent mints
+Ability to view minted NFTs and their metadata
+Transaction history for the connected wallet
+Retry mechanism for failed transactions
+Clear instructions for first-time users
+Testing Checklist:
+Test wallet connection/disconnection with multiple wallets
+Test successful NFT mint and verify on Stellar Explorer
+Test insufficient balance error handling
+Test wallet rejection/denial scenarios
+Test network error scenarios
+Test event listening and real-time updates
+Verify contract is deployed and callable
+Verify all 3+ error types are handled and displayed

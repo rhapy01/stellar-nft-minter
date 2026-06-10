@@ -3,13 +3,15 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Stellar NFT Minter API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: mints
+    description: NFT mint records and activity
 paths:
   /healthz:
     get:
@@ -24,6 +26,143 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /mints:
+    get:
+      operationId: listMints
+      tags: [mints]
+      summary: List recent NFT mints
+      parameters:
+        - name: walletAddress
+          in: query
+          schema:
+            type: string
+          description: Filter by wallet address
+        - name: limit
+          in: query
+          schema:
+            type: integer
+          description: Maximum number of results
+        - name: offset
+          in: query
+          schema:
+            type: integer
+          description: Offset for pagination
+      responses:
+        "200":
+          description: List of mint records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MintRecord"
+    post:
+      operationId: createMint
+      tags: [mints]
+      summary: Create a new mint record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MintInput"
+      responses:
+        "201":
+          description: Mint record created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MintRecord"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /mints/stats:
+    get:
+      operationId: getMintStats
+      tags: [mints]
+      summary: Get overall minting statistics
+      responses:
+        "200":
+          description: Minting statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MintStats"
+
+  /mints/recent:
+    get:
+      operationId: getRecentMints
+      tags: [mints]
+      summary: Get the 10 most recent successful mints
+      responses:
+        "200":
+          description: Recent successful mints
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MintRecord"
+
+  /mints/{id}:
+    get:
+      operationId: getMint
+      tags: [mints]
+      summary: Get a specific mint record
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Mint record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MintRecord"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateMint
+      tags: [mints]
+      summary: Update a mint record status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MintUpdate"
+      responses:
+        "200":
+          description: Updated mint record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MintRecord"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +173,118 @@ components:
       required:
         - status
 
+    MintRecord:
+      type: object
+      required:
+        - id
+        - walletAddress
+        - nftName
+        - description
+        - imageUrl
+        - status
+        - createdAt
+      properties:
+        id:
+          type: integer
+        walletAddress:
+          type: string
+        nftName:
+          type: string
+        description:
+          type: string
+        imageUrl:
+          type: string
+        attributes:
+          type: ["string", "null"]
+          description: JSON string of additional attributes
+        status:
+          type: string
+          enum: [pending, success, failed]
+        txHash:
+          type: ["string", "null"]
+        nftId:
+          type: ["string", "null"]
+        errorMessage:
+          type: ["string", "null"]
+        contractAddress:
+          type: ["string", "null"]
+        network:
+          type: string
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+
+    MintInput:
+      type: object
+      required:
+        - walletAddress
+        - nftName
+        - description
+        - imageUrl
+        - network
+      properties:
+        walletAddress:
+          type: string
+          minLength: 1
+        nftName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        imageUrl:
+          type: string
+          minLength: 1
+        attributes:
+          type: string
+          description: JSON string of additional attributes
+        contractAddress:
+          type: string
+        network:
+          type: string
+
+    MintUpdate:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [pending, success, failed]
+        txHash:
+          type: string
+        nftId:
+          type: string
+        errorMessage:
+          type: string
+        contractAddress:
+          type: string
+
+    MintStats:
+      type: object
+      required:
+        - totalMints
+        - successfulMints
+        - failedMints
+        - pendingMints
+        - uniqueWallets
+      properties:
+        totalMints:
+          type: integer
+        successfulMints:
+          type: integer
+        failedMints:
+          type: integer
+        pendingMints:
+          type: integer
+        uniqueWallets:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
